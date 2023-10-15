@@ -9,7 +9,8 @@
 const fs = require("fs");
 const path = require("path");
 const util = require("util");
-const writeFile = util.promisify(fs.writeFile);
+const writeFileAtomic = require("write-file-atomic");
+const writeFile = util.promisify(writeFileAtomic);
 const readFile = util.promisify(fs.readFile);
 const readdir = util.promisify(fs.readdir);
 const crypto = require("crypto");
@@ -145,7 +146,13 @@ async function collectAndCreateStats(chatsPath, charactersPath) {
  * @param {string} chatsPath - The path to the directory containing the chat files.
  * @param {string} charactersPath - The path to the directory containing the character files.
  */
-async function loadStatsFile(chatsPath, charactersPath) {
+async function loadStatsFile(chatsPath, charactersPath, recreateStats = false) {
+    if(recreateStats) {
+        charStats = await collectAndCreateStats(chatsPath, charactersPath); // Call your function to collect and create stats
+        await saveStatsToFile();
+        console.debug("Stats recreated and saved to file.");
+        return true;
+    }
     try {
         const statsFileContent = await readFile(statsFilePath, "utf-8");
         charStats = JSON.parse(statsFileContent);
@@ -165,7 +172,7 @@ async function loadStatsFile(chatsPath, charactersPath) {
  */
 async function saveStatsToFile() {
     if (charStats.timestamp > lastSaveTimestamp) {
-        console.debug("Saving stats to file...");
+        //console.debug("Saving stats to file...");
         await writeFile(statsFilePath, JSON.stringify(charStats));
         lastSaveTimestamp = Date.now();
     } else {

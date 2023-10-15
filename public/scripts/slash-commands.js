@@ -1,6 +1,5 @@
 import {
     addOneMessage,
-    autoSelectPersona,
     characters,
     chat,
     chat_metadata,
@@ -21,11 +20,14 @@ import {
     generateQuietPrompt,
     reloadCurrentChat,
     sendMessageAsUser,
+    name1,
 } from "../script.js";
-import { humanizedDateTime } from "./RossAscends-mods.js";
+import { getMessageTimeStamp } from "./RossAscends-mods.js";
 import { resetSelectedGroup } from "./group-chats.js";
 import { getRegexedString, regex_placement } from "./extensions/regex/engine.js";
 import { chat_styles, power_user } from "./power-user.js";
+import { autoSelectPersona } from "./personas.js";
+import { getContext } from "./extensions.js";
 export {
     executeSlashCommands,
     registerSlashCommand,
@@ -55,7 +57,7 @@ class SlashCommandParser {
 
         let stringBuilder = `<span class="monospace">/${command}</span> ${helpString} `;
         if (Array.isArray(aliases) && aliases.length) {
-            let aliasesString = `(aliases: ${aliases.map(x => `<span class="monospace">/${x}</span>`).join(', ')})`;
+            let aliasesString = `(alias: ${aliases.map(x => `<span class="monospace">/${x}</span>`).join(', ')})`;
             stringBuilder += aliasesString;
         }
         this.helpStrings.push(stringBuilder);
@@ -116,8 +118,8 @@ parser.addCommand('name', setNameCallback, ['persona'], '<span class="monospace"
 parser.addCommand('sync', syncCallback, [], ' – syncs user name in user-attributed messages in the current chat', true, true);
 parser.addCommand('lock', bindCallback, ['bind'], ' – locks/unlocks a persona (name and avatar) to the current chat', true, true);
 parser.addCommand('bg', setBackgroundCallback, ['background'], '<span class="monospace">(filename)</span> – sets a background according to filename, partial names allowed, will set the first one alphabetically if multiple files begin with the provided argument string', false, true);
-parser.addCommand('sendas', sendMessageAs, [], ` – sends message as a specific character.<br>Example:<br><pre><code>/sendas Chloe\nHello, guys!</code></pre>will send "Hello, guys!" from "Chloe".<br>Uses character avatar if it exists in the characters list.`, true, true);
-parser.addCommand('sys', sendNarratorMessage, [], '<span class="monospace">(text)</span> – sends message as a system narrator', false, true);
+parser.addCommand('sendas', sendMessageAs, [], ` – sends message as a specific character. Uses character avatar if it exists in the characters list. Example that will send "Hello, guys!" from "Chloe": <pre><code>/sendas Chloe&#10;Hello, guys!</code></pre>`, true, true);
+parser.addCommand('sys', sendNarratorMessage, ['nar'], '<span class="monospace">(text)</span> – sends message as a system narrator', false, true);
 parser.addCommand('sysname', setNarratorName, [], '<span class="monospace">(name)</span> – sets a name for future system narrator messages in this chat (display only). Default: System. Leave empty to reset.', true, true);
 parser.addCommand('comment', sendCommentMessage, [], '<span class="monospace">(text)</span> – adds a note/comment message not part of the chat', false, true);
 parser.addCommand('single', setStoryModeCallback, ['story'], ' – sets the message style to single document mode without names or avatars visible', true, true);
@@ -131,7 +133,7 @@ parser.addCommand('send', sendUserMessageCallback, ['add'], '<span class="monosp
 
 const NARRATOR_NAME_KEY = 'narrator_name';
 const NARRATOR_NAME_DEFAULT = 'System';
-const COMMENT_NAME_DEFAULT = 'Note';
+export const COMMENT_NAME_DEFAULT = 'Note';
 
 async function sendUserMessageCallback(_, text) {
     if (!text) {
@@ -225,7 +227,7 @@ function continueChatCallback() {
     $('#option_continue').trigger('click', { fromSlashCommand: true });
 }
 
-async function generateSystemMessage(_, prompt) {
+export async function generateSystemMessage(_, prompt) {
     $('#send_textarea').val('');
 
     if (!prompt) {
@@ -282,14 +284,14 @@ function setNameCallback(_, name) {
     setUserName(name); //this prevented quickReply usage
 }
 
-function setNarratorName(_, text) {
+async function setNarratorName(_, text) {
     const name = text || NARRATOR_NAME_DEFAULT;
     chat_metadata[NARRATOR_NAME_KEY] = name;
     toastr.info(`System narrator name set to ${name}`);
-    saveChatConditional();
+    await saveChatConditional();
 }
 
-async function sendMessageAs(_, text) {
+export async function sendMessageAs(_, text) {
     if (!text) {
         return;
     }
@@ -325,9 +327,8 @@ async function sendMessageAs(_, text) {
     const message = {
         name: name,
         is_user: false,
-        is_name: true,
         is_system: isSystem,
-        send_date: humanizedDateTime(),
+        send_date: getMessageTimeStamp(),
         mes: substituteParams(mesText),
         force_avatar: force_avatar,
         original_avatar: original_avatar,
@@ -338,12 +339,13 @@ async function sendMessageAs(_, text) {
     };
 
     chat.push(message);
-    addOneMessage(message);
     await eventSource.emit(event_types.MESSAGE_SENT, (chat.length - 1));
-    saveChatConditional();
+    addOneMessage(message);
+    await eventSource.emit(event_types.USER_MESSAGE_RENDERED, (chat.length - 1));
+    await saveChatConditional();
 }
 
-async function sendNarratorMessage(_, text) {
+export async function sendNarratorMessage(_, text) {
     if (!text) {
         return;
     }
@@ -356,9 +358,8 @@ async function sendNarratorMessage(_, text) {
     const message = {
         name: name,
         is_user: false,
-        is_name: false,
         is_system: isSystem,
-        send_date: humanizedDateTime(),
+        send_date: getMessageTimeStamp(),
         mes: substituteParams(text.trim()),
         force_avatar: system_avatar,
         extra: {
@@ -369,9 +370,49 @@ async function sendNarratorMessage(_, text) {
     };
 
     chat.push(message);
-    addOneMessage(message);
     await eventSource.emit(event_types.MESSAGE_SENT, (chat.length - 1));
-    saveChatConditional();
+    addOneMessage(message);
+    await eventSource.emit(event_types.USER_MESSAGE_RENDERED, (chat.length - 1));
+    await saveChatConditional();
+}
+
+export async function promptQuietForLoudResponse(who, text) {
+
+    let character_id = getContext().characterId;
+    if (who === 'sys') {
+        text = "System: " + text;
+    } else if (who === 'user') {
+        text = name1 + ": " + text;
+    } else if (who === 'char') {
+        text = characters[character_id].name + ": " + text;
+    } else if (who === 'raw') {
+        text = text;
+    }
+
+    //text = `${text}${power_user.instruct.enabled ? '' : '\n'}${(power_user.always_force_name2 && who != 'raw') ? characters[character_id].name + ":" : ""}`
+
+    let reply = await generateQuietPrompt(text, true);
+    text = await getRegexedString(reply, regex_placement.SLASH_COMMAND);
+
+    const message = {
+        name: characters[character_id].name,
+        is_user: false,
+        is_name: true,
+        is_system: false,
+        send_date: getMessageTimeStamp(),
+        mes: substituteParams(text.trim()),
+        extra: {
+            type: system_message_types.COMMENT,
+            gen_id: Date.now(),
+        },
+    };
+
+    chat.push(message);
+    await eventSource.emit(event_types.MESSAGE_SENT, (chat.length - 1));
+    addOneMessage(message);
+    await eventSource.emit(event_types.USER_MESSAGE_RENDERED, (chat.length - 1));
+    await saveChatConditional();
+
 }
 
 async function sendCommentMessage(_, text) {
@@ -382,9 +423,8 @@ async function sendCommentMessage(_, text) {
     const message = {
         name: COMMENT_NAME_DEFAULT,
         is_user: false,
-        is_name: true,
         is_system: true,
-        send_date: humanizedDateTime(),
+        send_date: getMessageTimeStamp(),
         mes: substituteParams(text.trim()),
         force_avatar: comment_avatar,
         extra: {
@@ -394,9 +434,10 @@ async function sendCommentMessage(_, text) {
     };
 
     chat.push(message);
-    addOneMessage(message);
     await eventSource.emit(event_types.MESSAGE_SENT, (chat.length - 1));
-    saveChatConditional();
+    addOneMessage(message);
+    await eventSource.emit(event_types.USER_MESSAGE_RENDERED, (chat.length - 1));
+    await saveChatConditional();
 }
 
 function helpCommandCallback(_, type) {

@@ -23,26 +23,9 @@ let lastMessageWasSwipe = false
 
 
 const defaultPrompts = {
-    "createTask": `Pause your roleplay and generate a list of tasks to complete an objective. Your next response must be formatted as a numbered list of plain text entries. Do not include anything but the numbered list. The list must be prioritized in the order that tasks must be completed.
-
-The objective that you must make a numbered task list for is: [{{objective}}].
-The tasks created should take into account the character traits of {{char}}. These tasks may or may not involve {{user}} directly. Be sure to include the objective as the final task.
-
-Given an example objective of 'Make me a four course dinner', here is an example output:
-1. Determine what the courses will be
-2. Find recipes for each course
-3. Go shopping for supplies with {{user}}
-4. Cook the food
-5. Get {{user}} to set the table
-6. Serve the food
-7. Enjoy eating the meal with {{user}}
-    `,
-    "checkTaskCompleted": `Pause your roleplay. Determine if this task is completed: [{{task}}].
-To do this, examine the most recent messages. Your response must only contain either true or false, nothing other words.
-Example output:
-true
-    `,
-    'currentTask':`Your current task is [{{task}}]. Balance existing roleplay with completing this task.`
+    "createTask": `Pause your roleplay. Please generate a numbered list of plain text tasks to complete an objective. The objective that you must make a numbered task list for is: "{{objective}}". The tasks created should take into account the character traits of {{char}}. These tasks may or may not involve {{user}} directly. Include the objective as the final task.`,
+    "checkTaskCompleted": `Pause your roleplay. Determine if this task is completed: [{{task}}]. To do this, examine the most recent messages. Your response must only contain either true or false, and nothing else. Example output: true`,
+    'currentTask':`Your current task is [{{task}}]. Balance existing roleplay with completing this task.`,
 }
 
 let objectivePrompts = defaultPrompts
@@ -72,20 +55,22 @@ function getTaskByIdRecurse(taskId, task) {
     return null;
 }
 
-function substituteParamsPrompts(content) {
+function substituteParamsPrompts(content, substituteGlobal) {
     content = content.replace(/{{objective}}/gi, currentObjective.description)
     content = content.replace(/{{task}}/gi, currentTask.description)
     if (currentTask.parent){
         content = content.replace(/{{parent}}/gi, currentTask.parent.description)
     }
-    content = substituteParams(content)
+    if (substituteGlobal) {
+        content = substituteParams(content)
+    }
     return content
 }
 
 // Call Quiet Generate to create task list using character context, then convert to tasks. Should not be called much.
 async function generateTasks() {
 
-    const prompt = substituteParamsPrompts(objectivePrompts.createTask);
+    const prompt = substituteParamsPrompts(objectivePrompts.createTask, false);
     console.log(`Generating tasks for objective with prompt`)
     toastr.info('Generating tasks for objective', 'Please wait...');
     const taskResponse = await generateQuietPrompt(prompt)
@@ -128,7 +113,7 @@ async function checkTaskCompleted() {
     checkCounter = $('#objective-check-frequency').val()
     toastr.info("Checking for task completion.")
 
-    const prompt = substituteParamsPrompts(objectivePrompts.checkTaskCompleted);
+    const prompt = substituteParamsPrompts(objectivePrompts.checkTaskCompleted, false);
     const taskResponse = (await generateQuietPrompt(prompt)).toLowerCase()
 
     // Check response if task complete
@@ -162,7 +147,7 @@ function getNextIncompleteTaskRecurse(task){
 }
 
 // Set a task in extensionPrompt context. Defaults to first incomplete
-function setCurrentTask(taskId = null) {
+function setCurrentTask(taskId = null, skipSave = false) {
     const context = getContext();
 
     // TODO: Should probably null this rather than set empty object
@@ -178,7 +163,7 @@ function setCurrentTask(taskId = null) {
     // Don't just check for a current task, check if it has data
     const description = currentTask.description || null;
     if (description) {
-        const extensionPromptText =  substituteParamsPrompts(objectivePrompts.currentTask);
+        const extensionPromptText =  substituteParamsPrompts(objectivePrompts.currentTask, true);
 
         // Remove highlights
         $('.objective-task').css({'border-color':'','border-width':''})
@@ -200,7 +185,10 @@ function setCurrentTask(taskId = null) {
         console.info(`No current task`);
     }
 
-    saveState();
+    // Save state if not skipping
+    if (!skipSave) {
+        saveState();
+    }
 }
 
 function getHighestTaskIdRecurse(task) {
@@ -729,7 +717,7 @@ function loadSettings() {
     $('#objective-check-frequency').val(chat_metadata['objective'].checkFrequency)
     $('#objective-hide-tasks').prop('checked', chat_metadata['objective'].hideTasks)
     $('#objective-tasks').prop('hidden', $('#objective-hide-tasks').prop('checked'))
-    setCurrentTask()
+    setCurrentTask(null, true)
 }
 
 function addManualTaskCheckUi() {
@@ -819,5 +807,5 @@ jQuery(() => {
         $('#objective-counter').text(checkCounter)
     });
 
-    registerSlashCommand('taskcheck', checkTaskCompleted, [], ' – checks if the current task is completed', true, true);
+    registerSlashCommand('taskcheck', checkTaskCompleted, [], '– checks if the current task is completed', true, true);
 });

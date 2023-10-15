@@ -1,7 +1,6 @@
 import {
     characters,
     saveChat,
-    sendSystemMessage,
     system_messages,
     system_message_types,
     this_chid,
@@ -19,6 +18,7 @@ import {
     getGroupPastChats,
     group_activation_strategy,
     groups,
+    openGroupById,
     openGroupChat,
     saveGroupBookmarkChat,
     selected_group,
@@ -131,6 +131,39 @@ async function saveBookmarkMenu() {
     }
 
     return createNewBookmark(chat.length - 1);
+}
+
+export async function createBranch(mesId) {
+    if (!chat.length) {
+        toastr.warning('The chat is empty.', 'Branch creation failed');
+        return;
+    }
+
+    if (mesId < 0 || mesId >= chat.length) {
+        toastr.warning('Invalid message ID.', 'Branch creation failed');
+        return;
+    }
+
+    const lastMes = chat[mesId];
+    const mainChat = selected_group ? groups?.find(x => x.id == selected_group)?.chat_id : characters[this_chid].chat;
+    const newMetadata = { main_chat: mainChat };
+    let name = `Branch #${mesId} - ${humanizedDateTime()}`
+
+    if (selected_group) {
+        await saveGroupBookmarkChat(selected_group, name, newMetadata, mesId);
+    } else {
+        await saveChat(name, newMetadata, mesId);
+    }
+    // append to branches list if it exists
+    // otherwise create it
+    if (typeof lastMes.extra !== 'object') {
+        lastMes.extra = {};
+    }
+    if (typeof lastMes.extra['branches'] !== 'object') {
+        lastMes.extra['branches'] = [];
+    }
+    lastMes.extra['branches'].push(name);
+    return name;
 }
 
 async function createNewBookmark(mesId) {
@@ -280,7 +313,6 @@ async function convertSoloToGroupChat() {
         message.name = character.name;
         message.original_avatar = character.avatar;
         message.force_avatar = getThumbnailUrl('avatar', character.avatar);
-        message.is_name = true;
 
         // Allow regens of a single message in group
         if (typeof message.extra !== 'object') {
@@ -301,13 +333,12 @@ async function convertSoloToGroupChat() {
     }
 
     // Click on the freshly selected group to open it
-    $(`.group_select[grid="${group.id}"]`).click();
+    await openGroupById(group.id);
 
-    await delay(1);
     toastr.success('The chat has been successfully converted!');
 }
 
-$(document).ready(function () {
+jQuery(function () {
     $('#option_new_bookmark').on('click', saveBookmarkMenu);
     $('#option_back_to_main').on('click', backToMainChat);
     $('#option_convert_to_group').on('click', convertSoloToGroupChat);

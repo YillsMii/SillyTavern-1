@@ -2,6 +2,7 @@ import { getStringHash, debounce, waitUntilCondition, extractAllWords } from "..
 import { getContext, getApiUrl, extension_settings, doExtrasFetch, modules } from "../../extensions.js";
 import { eventSource, event_types, extension_prompt_types, generateQuietPrompt, is_send_press, saveSettingsDebounced, substituteParams } from "../../../script.js";
 import { is_group_generating, selected_group } from "../../group-chats.js";
+import { registerSlashCommand } from "../../slash-commands.js";
 export { MODULE_NAME };
 
 const MODULE_NAME = '1_memory';
@@ -63,14 +64,14 @@ const defaultSettings = {
     source: summary_sources.extras,
     prompt: defaultPrompt,
     template: defaultTemplate,
-    position: extension_prompt_types.AFTER_SCENARIO,
+    position: extension_prompt_types.IN_PROMPT,
     depth: 2,
     promptWords: 200,
     promptMinWords: 25,
     promptMaxWords: 1000,
     promptWordsStep: 25,
     promptInterval: 10,
-    promptMinInterval: 1,
+    promptMinInterval: 0,
     promptMaxInterval: 100,
     promptIntervalStep: 1,
     promptForceWords: 0,
@@ -190,18 +191,21 @@ function onMemoryPromptInput() {
 function onMemoryTemplateInput() {
     const value = $(this).val();
     extension_settings.memory.template = value;
+    reinsertMemory();
     saveSettingsDebounced();
 }
 
 function onMemoryDepthInput() {
     const value = $(this).val();
     extension_settings.memory.depth = Number(value);
+    reinsertMemory();
     saveSettingsDebounced();
 }
 
 function onMemoryPositionChange(e) {
     const value = e.target.value;
     extension_settings.memory.position = value;
+    reinsertMemory();
     saveSettingsDebounced();
 }
 
@@ -333,6 +337,11 @@ async function summarizeChat(context) {
 }
 
 async function summarizeChatMain(context, force) {
+    if (extension_settings.memory.promptInterval === 0 && !force) {
+        console.debug('Prompt interval is set to 0, skipping summarization');
+        return;
+    }
+
     try {
         // Wait for group to finish generating
         if (selected_group) {
@@ -380,15 +389,14 @@ async function summarizeChatMain(context, force) {
     }
 
     console.log('Summarizing chat, messages since last summary: ' + messagesSinceLastSummary, 'words since last summary: ' + wordsSinceLastSummary);
-    const prompt = substituteParams(extension_settings.memory.prompt)
-        .replace(/{{words}}/gi, extension_settings.memory.promptWords);
+    const prompt = extension_settings.memory.prompt?.replace(/{{words}}/gi, extension_settings.memory.promptWords);
 
     if (!prompt) {
         console.debug('Summarization prompt is empty. Skipping summarization.');
         return;
     }
 
-    const summary = await generateQuietPrompt(prompt);
+    const summary = await generateQuietPrompt(prompt, false);
     const newContext = getContext();
 
     // something changed during summarization request
@@ -513,6 +521,11 @@ function onMemoryContentInput() {
     setMemoryContext(value, true);
 }
 
+function reinsertMemory() {
+    const existingValue = $('#memory_contents').val();
+    setMemoryContext(existingValue, false);
+}
+
 function setMemoryContext(value, saveToMessage) {
     const context = getContext();
     context.setExtensionPrompt(MODULE_NAME, formatMemoryValue(value), extension_settings.memory.position, extension_settings.memory.depth);
@@ -562,12 +575,16 @@ jQuery(function () {
                     <label for="memory_position">Injection position:</label>
                     <div class="radio_group">
                         <label>
+                            <input type="radio" name="memory_position" value="2" />
+                            Before Main Prompt / Story String
+                        </label>
+                        <label>
                             <input type="radio" name="memory_position" value="0" />
-                            After scenario
+                            After Main Prompt / Story String
                         </label>
                         <label>
                             <input type="radio" name="memory_position" value="1" />
-                            In-chat @ Depth <input id="memory_depth" class="text_pole widthUnset" type="number" min="0" max="99" />
+                            In-chat @ Depth <input id="memory_depth" class="text_pole widthUnset" type="number" min="0" max="999" />
                         </label>
                     </div>
                     <div data-source="main" class="memory_contents_controls">
@@ -584,6 +601,7 @@ jQuery(function () {
                         <label for="memory_prompt_words">Number of words in the summary (<span id="memory_prompt_words_value"></span> words)</label>
                         <input id="memory_prompt_words" type="range" value="${defaultSettings.promptWords}" min="${defaultSettings.promptMinWords}" max="${defaultSettings.promptMaxWords}" step="${defaultSettings.promptWordsStep}" />
                         <label for="memory_prompt_interval">Update interval (<span id="memory_prompt_interval_value"></span> messages)</label>
+                        <small>Set to 0 to disable</small>
                         <input id="memory_prompt_interval" type="range" value="${defaultSettings.promptInterval}" min="${defaultSettings.promptMinInterval}" max="${defaultSettings.promptMaxInterval}" step="${defaultSettings.promptIntervalStep}" />
                         <label for="memory_prompt_words_force">Force update after (<span id="memory_prompt_words_force_value"></span> words)</label>
                         <small>Set to 0 to disable</small>
@@ -632,4 +650,5 @@ jQuery(function () {
     eventSource.on(event_types.MESSAGE_EDITED, onChatEvent);
     eventSource.on(event_types.MESSAGE_SWIPED, onChatEvent);
     eventSource.on(event_types.CHAT_CHANGED, onChatEvent);
+    registerSlashCommand('summarize', forceSummarizeChat, [], '– forces the summarization of the current chat using the Main API', true, true);
 });
